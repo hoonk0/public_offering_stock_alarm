@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 from config import (
+    ASSUMED_RETAIL_COMPETITION,
     DETAIL_URL_FMT,
     GRADE_HISTORICAL_RETURNS,
     MARGIN_LOAN,
@@ -46,38 +47,61 @@ def _esc(text: object) -> str:
 
 def _margin_loan_section(grade: str, offering_price: Optional[int]) -> str:
     """
-    마통(마이너스통장) 청약 손익 분석.
-    1주당 예상 차익(등급별 평균) vs 1주당 마통 이자 비교 + 등급별 권장.
-    Day1/Day2 알림 메시지에만 노출.
+    마통(마이너스통장) 청약 손익 분석 — 7천만원 마통 시나리오.
+
+    계산 흐름:
+      1. 마통 7천만원 → 신청 가능 주식 = 7천만원 / (공모가 × 50%)
+      2. 등급별 가정 청약경쟁률로 비례 배정 추정
+         + 균등 배정 1주 가정
+      3. 배정 주식 × 1주당 평균 차익 = 예상 차익
+      4. 마통 5일 이자 차감 = 순익 추정
     """
+    amount = int(MARGIN_LOAN["scenario_amount"])
     rate = MARGIN_LOAN["annual_rate"]
     days = int(MARGIN_LOAN["subscription_days"])
     deposit_rate = MARGIN_LOAN["deposit_rate"]
 
+    interest = int(round(amount * rate * days / 365))
     rec, comment = MARGIN_LOAN_RECOMMENDATION.get(grade, ("-", ""))
     stat = GRADE_HISTORICAL_RETURNS.get(grade)
 
-    interest_pct = rate * days / 365 * 100  # %
-
     if not offering_price or not stat:
         return (
-            f"<b>🏦 마통 청약 분석</b>\n"
-            f"• 5일 이자율: {interest_pct:.2f}% (연 {int(rate*100)}% 기준)\n"
-            f"• {_esc(rec)} — {_esc(comment)}"
+            f"<b>🏦 마통 {amount//10_000_000}천만원 시나리오</b> "
+            f"(연 {int(rate*100)}%, {days}일)\n"
+            f"• 5일 이자: -{interest:,}원\n"
+            f"• 권장: {_esc(rec)} — {_esc(comment)}"
         )
 
+    # 1) 신청 가능 주식 (50% 증거금)
+    deposit_per_share = max(1, int(round(offering_price * deposit_rate)))
+    apply_shares = amount // deposit_per_share
+
+    # 2) 등급별 청약경쟁률 가정 → 비례 배정 + 균등 1주
+    competition = ASSUMED_RETAIL_COMPETITION.get(grade, 500)
+    proportional = apply_shares // competition
+    equal_share = 1  # 균등 배정 1주 가정 (단순화)
+    allocated = proportional + equal_share
+
+    # 3) 1주당 차익 + 총 차익
     avg_return_pct = stat["avg_pct"]
     gain_per_share = int(round(offering_price * avg_return_pct / 100))
-    deposit_per_share = int(round(offering_price * deposit_rate))
-    interest_per_share = round(deposit_per_share * rate * days / 365, 1)
-    net_per_share = gain_per_share - interest_per_share
+    total_gain = gain_per_share * allocated
+
+    # 4) 순익
+    net = total_gain - interest
 
     return (
-        f"<b>🏦 마통 청약 분석</b> (연 {int(rate*100)}%, {days}일)\n"
-        f"• 1주당 예상 차익: <b>+{gain_per_share:,}원</b> "
-        f"(증거금 {deposit_per_share:,}원 × 평균 +{avg_return_pct:.0f}%)\n"
-        f"• 1주당 마통 이자: -{int(interest_per_share):,}원\n"
-        f"• 1주당 순익: <b>+{int(net_per_share):,}원</b>\n"
+        f"<b>🏦 마통 {amount//10_000_000}천만원 시나리오</b> "
+        f"(연 {int(rate*100)}%, {days}일)\n"
+        f"• 신청 가능: <b>{apply_shares:,}주</b> "
+        f"(공모가 {offering_price:,}원 × 50% 증거금)\n"
+        f"• 추정 배정: <b>{allocated:,}주</b> "
+        f"(청약경쟁률 {competition:,}:1 가정 + 균등 1주)\n"
+        f"• 예상 차익: +{total_gain:,}원 "
+        f"(1주당 +{gain_per_share:,}원 × {allocated:,}주)\n"
+        f"• 5일 마통 이자: -{interest:,}원\n"
+        f"• <b>순익 추정: {'+' if net >= 0 else ''}{net:,}원</b>\n"
         f"• 권장: {_esc(rec)} — {_esc(comment)}"
     )
 
