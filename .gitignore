@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# 환경 변수 (텔레그램 토큰 — 절대 commit 금지!)
+.env
+.env.local
+
+# 런타임 데이터
+*.db
+*.log
+ipo_bot.log*
+
+# 임시 분석/검증 스크립트
+_validate.py
+_score_dist.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 압축 파일
+*.tar.gz
+*.zip
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,23 @@
+[Unit]
+Description=IPO Bot (38 communication crawler + Telegram alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kyunghoon
+WorkingDirectory=/home/kyunghoon/ipo_bot
+ExecStart=/home/kyunghoon/ipo_bot/.venv/bin/python /home/kyunghoon/ipo_bot/main.py
+Environment=PYTHONUNBUFFERED=1
+
+# 죽으면 자동 재시작
+Restart=always
+RestartSec=10
+
+# 로그 표준 출력 → journalctl로 볼 수 있게
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipo-bot
+
+[Install]
+WantedBy=multi-user.target
