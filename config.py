@@ -175,7 +175,7 @@ GRADE_HISTORICAL_RETURNS: dict[str, dict[str, float]] = {
 MARGIN_LOAN = {
     "annual_rate": 0.05,            # 연 5% 마통 이자
     "default_days": 5,              # 청약 시작~환불 기본값 (계산 불가 시 fallback)
-    "scenario_amount": 70_000_000,  # 7천만원 마통 기준 시나리오
+    "scenario_amount": 50_000_000,  # 5천만원 마통 기준 시나리오
 }
 
 # 등급별 마통 청약 권장 가이드 (이자 vs 평균 수익률 기반)
