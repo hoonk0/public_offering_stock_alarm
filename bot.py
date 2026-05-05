@@ -509,8 +509,9 @@ def _process_update(update: dict, chat_filter: Optional[str]) -> None:
     # 캐시 적중률 모를 때 ack 메시지 먼저 보내 사용자가 응답을 기다리는 동안 안 답답하게.
     if text.strip() in GRADE_RETURN_CMDS:
         send_telegram(
-            f"⏳ {GRADE_RETURN_CMDS[text.strip()]} 종목 분석 중입니다… "
-            "처음 조회는 30초~1분 정도 걸릴 수 있어요.",
+            f"⏳ {GRADE_RETURN_CMDS[text.strip()]} 종목 분석 중입니다…\n"
+            "🐢 첫 조회는 1~3분 걸릴 수 있어요 (38커뮤 종목별로 1초~10초).\n"
+            "💾 한 번 분석된 종목은 캐시되어 두 번째부터 즉시 응답합니다.",
             chat_id=chat_id,
         )
 
