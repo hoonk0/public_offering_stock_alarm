@@ -261,6 +261,28 @@ def run_day2_reminder(target_day: Optional[date] = None,
 
 
 # ---------------------------------------------------------------------------
+# 캐시 자동 갱신 (백그라운드)
+# 라즈베리파이처럼 38커뮤 fetch가 느린 환경에서도 사용자는 항상 즉시 응답 받게.
+# 매시간 정각에 백그라운드로 schedule_list + listed_stocks 캐시 갱신.
+# ---------------------------------------------------------------------------
+def refresh_caches() -> None:
+    """fetch_schedule_list + fetch_listed_stocks 캐시 갱신."""
+    log.info("=== 캐시 자동 갱신 시작 ===")
+    try:
+        schedules = fetch_schedule_list()
+        log.info("schedule_list 갱신: %d종목", len(schedules))
+    except Exception as e:  # noqa: BLE001
+        log.exception("schedule_list 갱신 실패: %s", e)
+    try:
+        from crawler import fetch_listed_stocks
+        listed = fetch_listed_stocks(date.today().year)
+        log.info("listed_stocks 갱신: %d종목", len(listed))
+    except Exception as e:  # noqa: BLE001
+        log.exception("listed_stocks 갱신 실패: %s", e)
+    log.info("=== 캐시 자동 갱신 완료 ===")
+
+
+# ---------------------------------------------------------------------------
 # 스케줄러
 # ---------------------------------------------------------------------------
 def run_scheduler(enable_polling: bool = True) -> None:
@@ -285,15 +307,26 @@ def run_scheduler(enable_polling: bool = True) -> None:
         trigger=CronTrigger(hour=DAY2_HOUR, minute=DAY2_MINUTE),
         name="ipo_day2_reminder",
     )
+    # 캐시 자동 갱신: 매시간 정각 (사용자는 항상 즉시 응답)
+    scheduler.add_job(
+        refresh_caches,
+        trigger=CronTrigger(minute=0),
+        name="cache_refresh",
+    )
 
     log.info(
         "스케줄러 시작 (KST): "
-        "월간=매월%d일 %02d:%02d, Day1=매일 %02d:%02d, Day2=매일 %02d:%02d",
+        "월간=매월%d일 %02d:%02d, Day1=매일 %02d:%02d, Day2=매일 %02d:%02d, "
+        "캐시갱신=매시간 정각",
         MONTHLY_DAY, MONTHLY_HOUR, MONTHLY_MINUTE,
         DAY1_HOUR, DAY1_MINUTE,
         DAY2_HOUR, DAY2_MINUTE,
     )
     scheduler.start()
+
+    # 봇 시작 즉시 첫 워밍업 (백그라운드, 폴링 블로킹 안 됨)
+    import threading
+    threading.Thread(target=refresh_caches, name="initial_warmup", daemon=True).start()
 
     try:
         if enable_polling:

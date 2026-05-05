@@ -277,8 +277,9 @@ def _parse_subscribe_period(text: str) -> tuple[Optional[date], Optional[date]]:
 # ---------------------------------------------------------------------------
 import time as _time
 
-_SCHEDULE_TTL_SEC = 600    # 청약일정: 10분
-_LISTED_TTL_SEC = 3600     # 신규상장 결과: 1시간
+# TTL은 백그라운드 자동 갱신(매시 정각)보다 약간 길게 잡아 갱신 실패 시도 마진 확보
+_SCHEDULE_TTL_SEC = 5400    # 청약일정: 90분
+_LISTED_TTL_SEC = 7200      # 신규상장 결과: 2시간
 
 _schedule_cache: Optional[tuple[float, list]] = None
 _listed_cache: dict[int, tuple[float, list]] = {}
