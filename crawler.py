@@ -22,7 +22,26 @@ from datetime import date, datetime
 from typing import Optional
 
 import requests
+import socket
+import urllib3
 from bs4 import BeautifulSoup, Tag
+
+# ---------------------------------------------------------------------------
+# IPv4 강제 (라즈베리파이/한국 통신사에서 IPv6 fallback 지연 회피)
+# 38커뮤가 IPv6 미지원이라 IPv6 시도 → 실패 → IPv4 retry로 매 요청마다 5~10초 추가 대기.
+# 시작 시 한 번만 IPv4 only로 강제하면 즉시 응답.
+# ---------------------------------------------------------------------------
+urllib3.util.connection.HAS_IPV6 = False
+
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_only_getaddrinfo(*args, **kwargs):
+    responses = _orig_getaddrinfo(*args, **kwargs)
+    return [r for r in responses if r[0] == socket.AF_INET]
+
+
+socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 from config import (
     DETAIL_URL_FMT,
