@@ -95,11 +95,40 @@ class IpoDetail:
 
 # ---------------------------------------------------------------------------
 # HTTP
+# 38커뮤가 가끔 응답이 느려 타임아웃이 나는 경우가 있어 retry 정책 + 긴 timeout 사용.
 # ---------------------------------------------------------------------------
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+_session: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    """requests.Session 싱글톤 + 자동 retry (네트워크 일시 장애 흡수)."""
+    global _session
+    if _session is None:
+        s = requests.Session()
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            backoff_factor=1.5,   # 1.5s, 3s, 6s 간격으로 재시도
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+        _session = s
+    return _session
+
+
 def _fetch(url: str) -> BeautifulSoup:
     """38커뮤 페이지를 받아 BeautifulSoup으로 반환. EUC-KR 인코딩 처리."""
     log.debug("GET %s", url)
-    resp = requests.get(url, headers=HTTP_HEADERS, timeout=15)
+    session = _get_session()
+    # connect 10s, read 30s — 38커뮤 응답 느린 경우 대비
+    resp = session.get(url, headers=HTTP_HEADERS, timeout=(10, 30))
     resp.encoding = SITE_ENCODING
     resp.raise_for_status()
     time.sleep(REQUEST_DELAY_SEC)

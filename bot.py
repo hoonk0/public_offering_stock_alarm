@@ -518,7 +518,14 @@ def _process_update(update: dict, chat_filter: Optional[str]) -> None:
         reply = handle_text(text)
     except Exception as e:  # noqa: BLE001
         log.exception("명령어 처리 실패: %s", e)
-        send_telegram(f"⚠️ 처리 중 오류: <code>{e}</code>", chat_id=chat_id)
+        err_str = str(e).lower()
+        if "timeout" in err_str or "timed out" in err_str or "connection" in err_str:
+            send_telegram(
+                "⏳ 38커뮤 응답이 느립니다. 잠시 후 다시 시도해주세요.",
+                chat_id=chat_id,
+            )
+        else:
+            send_telegram(f"⚠️ 처리 중 오류: <code>{e}</code>", chat_id=chat_id)
         return
 
     if reply is None:
