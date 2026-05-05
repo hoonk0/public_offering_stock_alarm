@@ -270,6 +270,24 @@ def _parse_subscribe_period(text: str) -> tuple[Optional[date], Optional[date]]:
     return None, None
 
 
+# ---------------------------------------------------------------------------
+# 인메모리 캐시 (TTL 기반)
+# 라즈베리파이 같은 느린 환경에서 38커뮤 페이지 매번 fetch 안 하게.
+# 봇 프로세스 살아있는 동안만 캐시. 재시작 시 비워짐.
+# ---------------------------------------------------------------------------
+import time as _time
+
+_SCHEDULE_TTL_SEC = 600    # 청약일정: 10분
+_LISTED_TTL_SEC = 3600     # 신규상장 결과: 1시간
+
+_schedule_cache: Optional[tuple[float, list]] = None
+_listed_cache: dict[int, tuple[float, list]] = {}
+
+
+def _is_fresh(ts: float, ttl: float) -> bool:
+    return (_time.time() - ts) < ttl
+
+
 def fetch_schedule_list() -> list[IpoSchedule]:
     """
     공모주 청약일정 페이지(/html/fund/index.htm?o=k)에서
@@ -283,7 +301,14 @@ def fetch_schedule_list() -> list[IpoSchedule]:
         [5] 주관사
 
     상세 링크 패턴(`/html/fund/?o=v&no=`)을 가진 tr만 골라내 안정적으로 파싱.
+
+    인메모리 캐시 10분 TTL 적용 — 같은 봇 프로세스에서 짧은 시간 내 재호출 시 즉시 반환.
     """
+    global _schedule_cache
+    if _schedule_cache and _is_fresh(_schedule_cache[0], _SCHEDULE_TTL_SEC):
+        log.debug("schedule cache hit (%d종목)", len(_schedule_cache[1]))
+        return _schedule_cache[1]
+
     soup = _fetch(SCHEDULE_URL)
     results: list[IpoSchedule] = []
 
@@ -340,6 +365,7 @@ def fetch_schedule_list() -> list[IpoSchedule]:
         deduped.append(item)
 
     log.info("청약일정 페이지에서 %d개 종목 수집", len(deduped))
+    _schedule_cache = (_time.time(), deduped)
     return deduped
 
 
@@ -388,7 +414,13 @@ def fetch_listed_stocks(year: int, max_pages: int = 8) -> list[ListedStock]:
     상장일이 미래(미상장)인 종목 + 종가가 없는 종목은 제외 가능 → 호출부에서 필터.
 
     수익률 계산은 ListedStock.return_pct 프로퍼티에서 자동.
+    인메모리 캐시 1시간 TTL 적용 — 라즈베리파이에서 큰 페이지 fetch 안 하도록.
     """
+    if year in _listed_cache and _is_fresh(_listed_cache[year][0], _LISTED_TTL_SEC):
+        cached = _listed_cache[year][1]
+        log.debug("listed cache hit for %d (%d종목)", year, len(cached))
+        return cached
+
     results: list[ListedStock] = []
     seen_nos: set[str] = set()
 
@@ -436,6 +468,7 @@ def fetch_listed_stocks(year: int, max_pages: int = 8) -> list[ListedStock]:
             break
 
     log.info("%d년 상장 종목 %d개 수집", year, len(results))
+    _listed_cache[year] = (_time.time(), results)
     return results
 
 
