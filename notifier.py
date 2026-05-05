@@ -19,6 +19,7 @@ import requests
 
 from config import (
     DETAIL_URL_FMT,
+    GRADE_HISTORICAL_RETURNS,
     MARGIN_LOAN,
     SCHEDULE_URL,
     TELEGRAM_API_URL,
@@ -148,6 +149,19 @@ def build_message(detail: IpoDetail, result: GradeResult, phase: str = PHASE_DAY
 
     bd = result.breakdown
     margin_section = _margin_loan_section(detail)
+
+    # 1주당 예상 수익: 등급별 과거 평균 시초가 수익률 × 공모가
+    stat = GRADE_HISTORICAL_RETURNS.get(result.grade)
+    if stat and detail.final_price:
+        avg_pct = stat["avg_pct"]
+        gain_per_share = int(round(detail.final_price * avg_pct / 100))
+        expected_line = (
+            f"📈 <b>1주당 예상 수익: +{gain_per_share:,}원</b> "
+            f"({result.grade} 평균 +{avg_pct:.0f}%)\n\n"
+        )
+    else:
+        expected_line = ""
+
     return (
         f"{phase_header}"
         f"{result.emoji} <b>[{name}] {result.grade}</b>  "
@@ -162,6 +176,7 @@ def build_message(detail: IpoDetail, result: GradeResult, phase: str = PHASE_DAY
         f"• 유통가능물량: <b>{_esc(floatr)}</b>  ({bd['float']}/3)\n"
         f"• 공모가: {_esc(band_line)}  ({bd['price']}/3)\n"
         f"\n"
+        f"{expected_line}"
         f"{margin_section}\n"
         f"\n"
         f'🔗 <a href="{_esc(detail_url)}">38커뮤 상세 (no={no})</a>'
