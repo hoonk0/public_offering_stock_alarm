@@ -28,8 +28,9 @@ from config import DB_PATH
 log = logging.getLogger(__name__)
 
 # 발송 단계
-PHASE_DAY1 = "day1"
-PHASE_DAY2 = "day2"
+PHASE_DAY1 = "day1"                # 첫날 08:30
+PHASE_DAY2_MORNING = "day2_morning"  # 마감일 08:30 (신규)
+PHASE_DAY2 = "day2"                # 마감일 15:00 임박 리마인더
 
 
 @contextmanager

@@ -29,8 +29,9 @@ from config import (
 from crawler import IpoDetail, IpoSchedule
 from grader import GradeResult
 
-# 발송 단계 (db.PHASE_DAY1/DAY2와 같은 값을 사용)
+# 발송 단계 (db.py와 같은 값 사용)
 PHASE_DAY1 = "day1"
+PHASE_DAY2_MORNING = "day2_morning"
 PHASE_DAY2 = "day2"
 
 log = logging.getLogger(__name__)
@@ -109,7 +110,9 @@ def build_message(detail: IpoDetail, result: GradeResult, phase: str = PHASE_DAY
 
     # 단계별 헤더 라벨
     if phase == PHASE_DAY2:
-        phase_header = "⏰ <b>오늘 청약 마감!</b>\n\n"
+        phase_header = "⏰ <b>오늘 청약 마감! (오후 알림)</b>\n\n"
+    elif phase == PHASE_DAY2_MORNING:
+        phase_header = "🌅 <b>오늘 청약 마감일! (오전 알림)</b>\n\n"
     else:
         phase_header = "🔔 <b>오늘 청약 첫날!</b>\n\n"
 
@@ -162,12 +165,21 @@ def build_message(detail: IpoDetail, result: GradeResult, phase: str = PHASE_DAY
     else:
         expected_line = ""
 
+    # 상장일 (있을 때만)
+    listing_line = ""
+    if detail.listing_date:
+        weekday = ["월","화","수","목","금","토","일"][detail.listing_date.weekday()]
+        listing_line = (
+            f"🎯 상장일: {detail.listing_date.strftime('%Y-%m-%d')}({weekday})\n"
+        )
+
     return (
         f"{phase_header}"
         f"{result.emoji} <b>[{name}] {result.grade}</b>  "
         f"(<b>{result.total_score}/12</b>점)\n"
         f"\n"
         f"📅 청약일: {_esc(sub_period)}\n"
+        f"{listing_line}"
         f"🏦 주관사: {underwriter}\n"
         f"\n"
         f"<b>📊 4대 지표</b>\n"

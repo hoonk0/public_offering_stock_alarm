@@ -75,7 +75,11 @@ MONTHLY_MINUTE = 0
 DAY1_HOUR = 8
 DAY1_MINUTE = 30
 
-# 3) 청약 둘째날 리마인더
+# 3) 청약 둘째날 오전 알림 (마감일 아침)
+DAY2_MORNING_HOUR = 8
+DAY2_MORNING_MINUTE = 30
+
+# 4) 청약 둘째날 마감 임박 리마인더
 DAY2_HOUR = 15
 DAY2_MINUTE = 0
 

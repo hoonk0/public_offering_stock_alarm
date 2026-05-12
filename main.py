@@ -44,6 +44,8 @@ from config import (
     DAY1_MINUTE,
     DAY2_HOUR,
     DAY2_MINUTE,
+    DAY2_MORNING_HOUR,
+    DAY2_MORNING_MINUTE,
     LOG_PATH,
     MONTHLY_DAY,
     MONTHLY_HOUR,
@@ -53,6 +55,7 @@ from crawler import IpoSchedule, fetch_detail, fetch_schedule_list
 from db import (
     PHASE_DAY1,
     PHASE_DAY2,
+    PHASE_DAY2_MORNING,
     already_digested,
     already_sent,
     init_db,
@@ -220,7 +223,44 @@ def run_day1_alert(target_day: Optional[date] = None,
 
 
 # ---------------------------------------------------------------------------
-# 3) 청약 둘째날 리마인더 (마감일 15:00)
+# 3-a) 청약 둘째날 오전 알림 (마감일 08:30)
+# ---------------------------------------------------------------------------
+def run_day2_morning_alert(target_day: Optional[date] = None,
+                           dry_run: bool = False) -> None:
+    """청약 마감일 아침 알림. Day2 리마인더와 동일 로직, phase만 다름."""
+    init_db()
+    if target_day is None:
+        target_day = date.today()
+    log.info("=== Day2 오전 알림 시작 (target_day=%s, dry_run=%s) ===", target_day, dry_run)
+
+    schedules = _safe_fetch_schedules()
+    targets = [
+        s for s in schedules
+        if s.subscribe_end == target_day
+        and s.subscribe_start is not None
+        and s.subscribe_start != s.subscribe_end
+    ]
+    log.info("청약 둘째날(오전) 매칭 %d종목", len(targets))
+
+    sent = skip = fail = 0
+    for s in targets:
+        try:
+            ok = _process_one(s, PHASE_DAY2_MORNING, dry_run)
+            if ok:
+                sent += 1
+            elif already_sent(s.no, s.subscribe_start, PHASE_DAY2_MORNING):
+                skip += 1
+            else:
+                fail += 1
+        except Exception as e:  # noqa: BLE001
+            log.exception("[%s/%s] day2_morning 처리 중 예외: %s", s.no, s.name, e)
+            fail += 1
+
+    log.info("=== Day2 오전 알림 종료: 발송 %d, 스킵 %d, 실패 %d ===", sent, skip, fail)
+
+
+# ---------------------------------------------------------------------------
+# 3-b) 청약 둘째날 마감 임박 리마인더 (마감일 15:00)
 # ---------------------------------------------------------------------------
 def run_day2_reminder(target_day: Optional[date] = None,
                       dry_run: bool = False) -> None:
@@ -266,19 +306,25 @@ def run_day2_reminder(target_day: Optional[date] = None,
 # 매시간 정각에 백그라운드로 schedule_list + listed_stocks 캐시 갱신.
 # ---------------------------------------------------------------------------
 def refresh_caches() -> None:
-    """fetch_schedule_list + fetch_listed_stocks 캐시 갱신."""
+    """
+    fetch_schedule_list + fetch_listed_stocks (작년+올해 2년치) 캐시 갱신.
+    수익률 조회가 작년+올해 데이터를 쓰므로 둘 다 워밍업.
+    """
     log.info("=== 캐시 자동 갱신 시작 ===")
     try:
         schedules = fetch_schedule_list()
         log.info("schedule_list 갱신: %d종목", len(schedules))
     except Exception as e:  # noqa: BLE001
         log.exception("schedule_list 갱신 실패: %s", e)
-    try:
-        from crawler import fetch_listed_stocks
-        listed = fetch_listed_stocks(date.today().year)
-        log.info("listed_stocks 갱신: %d종목", len(listed))
-    except Exception as e:  # noqa: BLE001
-        log.exception("listed_stocks 갱신 실패: %s", e)
+
+    from crawler import fetch_listed_stocks
+    today = date.today()
+    for year in (today.year - 1, today.year):
+        try:
+            listed = fetch_listed_stocks(year)
+            log.info("listed_stocks(%d) 갱신: %d종목", year, len(listed))
+        except Exception as e:  # noqa: BLE001
+            log.exception("listed_stocks(%d) 갱신 실패: %s", year, e)
     log.info("=== 캐시 자동 갱신 완료 ===")
 
 
@@ -303,6 +349,11 @@ def run_scheduler(enable_polling: bool = True) -> None:
         name="ipo_day1_alert",
     )
     scheduler.add_job(
+        run_day2_morning_alert,
+        trigger=CronTrigger(hour=DAY2_MORNING_HOUR, minute=DAY2_MORNING_MINUTE),
+        name="ipo_day2_morning",
+    )
+    scheduler.add_job(
         run_day2_reminder,
         trigger=CronTrigger(hour=DAY2_HOUR, minute=DAY2_MINUTE),
         name="ipo_day2_reminder",
@@ -316,10 +367,11 @@ def run_scheduler(enable_polling: bool = True) -> None:
 
     log.info(
         "스케줄러 시작 (KST): "
-        "월간=매월%d일 %02d:%02d, Day1=매일 %02d:%02d, Day2=매일 %02d:%02d, "
-        "캐시갱신=매시간 정각",
+        "월간=매월%d일 %02d:%02d, Day1=매일 %02d:%02d, "
+        "Day2오전=매일 %02d:%02d, Day2오후=매일 %02d:%02d, 캐시갱신=매시간 정각",
         MONTHLY_DAY, MONTHLY_HOUR, MONTHLY_MINUTE,
         DAY1_HOUR, DAY1_MINUTE,
+        DAY2_MORNING_HOUR, DAY2_MORNING_MINUTE,
         DAY2_HOUR, DAY2_MINUTE,
     )
     scheduler.start()
@@ -353,7 +405,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="IPO 등급 알림 봇")
     parser.add_argument(
         "--mode",
-        choices=["monthly", "day1", "day2"],
+        choices=["monthly", "day1", "day2_morning", "day2"],
         default=None,
         help="즉시 1회 실행할 잡. 미지정 시 스케줄러 모드.",
     )
@@ -377,6 +429,8 @@ def main() -> None:
         run_monthly_digest(target_month=args.target_date, dry_run=args.dry_run, force=args.force)
     elif args.mode == "day1":
         run_day1_alert(target_day=args.target_date, dry_run=args.dry_run)
+    elif args.mode == "day2_morning":
+        run_day2_morning_alert(target_day=args.target_date, dry_run=args.dry_run)
     elif args.mode == "day2":
         run_day2_reminder(target_day=args.target_date, dry_run=args.dry_run)
     elif args.bot_only:

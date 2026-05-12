@@ -109,6 +109,7 @@ class IpoDetail:
     underwriter: str = ""                         # 주관사
     subscribe_start: Optional[date] = None
     subscribe_end: Optional[date] = None
+    listing_date: Optional[date] = None           # 상장 예정일/완료일
     raw_errors: list[str] = field(default_factory=list)  # 파싱 실패 항목들
 
 
@@ -676,6 +677,17 @@ def fetch_detail(no: str, name: str = "", base: Optional[IpoSchedule] = None) ->
 
     # 주관사는 일정 페이지에서 받아온 값을 그대로 신뢰.
     # 상세 페이지 보호예수표에 '주관사 의무인수' 헤더가 있어 잘못 매칭되므로 fallback 안 함.
+
+    # --- 상장 예정/완료일 ---
+    try:
+        raw = _find_value_by_label(soup, r"^신규상장일$|^상장일$")
+        detail.listing_date = _parse_date_kr(raw or "")
+        if detail.listing_date is None:
+            # 더 너른 패턴 시도
+            raw2 = _find_value_by_label(soup, r"상장")
+            detail.listing_date = _parse_date_kr(raw2 or "")
+    except Exception as e:  # noqa: BLE001
+        detail.raw_errors.append(f"listing_date 예외: {e}")
 
     if detail.raw_errors:
         log.warning("[%s/%s] 파싱 경고: %s", no, detail.name, "; ".join(detail.raw_errors))

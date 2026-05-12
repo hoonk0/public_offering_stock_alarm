@@ -57,6 +57,7 @@ THIS_MONTH_ALIASES = {"/이번달", "/this", "/now"}
 NEXT_MONTH_ALIASES = {"/다음달", "/next"}
 THIS_WEEK_ALIASES = {"/이번주", "/이주", "/thisweek"}
 NEXT_WEEK_ALIASES = {"/다음주", "/nextweek"}
+LISTING_ALIASES = {"/상장예정", "/상장", "/listing"}
 HELP_ALIASES = {"/start", "/help", "/도움말"}
 
 # 등급별 수익률 명령 (/1등급 ~ /5등급)
@@ -80,9 +81,10 @@ DEFAULT_RETURN_YEAR = _dt.date.today().year
 
 HELP_TEXT = (
     "🤖 <b>공모주 알림봇</b>\n\n"
-    "<b>📅 청약 예정 조회</b>\n"
+    "<b>📅 청약/상장 예정 조회</b>\n"
     "• <code>/이번주</code> — 이번 주 청약 종목 + 등급 + 예상 수익률\n"
     "• <code>/다음주</code> — 다음 주 청약 종목\n"
+    "• <code>/상장예정</code> — 앞으로 상장 예정 종목 (D-day 표시)\n"
     "• <code>/5</code> 또는 <code>/5월</code> — 5월 청약 예정 종목\n"
     "• <code>/이번달</code> — 이번 달 청약 예정 종목\n"
     "• <code>/다음달</code> — 다음 달 청약 예정 종목\n\n"
@@ -229,9 +231,13 @@ def _build_weekly_message(start: date, end: date, label: str) -> str:
                            else f"{d.band_low:,}~{d.band_high:,}원" if d.band_low and d.band_high
                            else "-")
 
+            listing_str = ""
+            if d.listing_date:
+                wd = ["월","화","수","목","금","토","일"][d.listing_date.weekday()]
+                listing_str = f" · 🎯 상장 {d.listing_date.strftime('%m/%d')}({wd})"
             block = (
                 f"{emoji} {name_link}  <b>{result.grade} ({result.total_score}/12)</b>\n"
-                f"   📅 {period} · 🏦 {underwriter} · 💰 공모가 {_esc_simple(final_price)}\n"
+                f"   📅 {period} · 🏦 {underwriter} · 💰 공모가 {_esc_simple(final_price)}{listing_str}\n"
                 f"   📊 경쟁률 {_esc_simple(comp)} · 의무보유 {_esc_simple(lock)} · 공모가 {pos_kr}\n"
                 f"   {_expected_return_line(result.grade, d.final_price)}"
             )
@@ -253,6 +259,42 @@ def _esc_simple(text: object) -> str:
     return _html.escape(str(text), quote=False)
 
 
+def _build_upcoming_listings_message(today: date) -> str:
+    """
+    앞으로 상장 예정인 종목들을 상장일 빠른 순으로 정렬해 보여준다.
+    데이터 출처는 신규상장 결과 페이지(`fetch_listed_stocks`).
+    상장일이 today 이상인 종목만 추리고, 청약 끝났는지 여부와 함께 표시.
+    """
+    today_year = today.year
+    stocks = fetch_listed_stocks(today_year)
+    # 미래 상장 (오늘 이후) + 상장일 있음
+    items = [
+        s for s in stocks
+        if s.listing_date and s.listing_date >= today
+    ]
+    items.sort(key=lambda s: s.listing_date or date.max)
+
+    header = f"🎯 <b>상장 예정 종목</b>\n총 <b>{len(items)}</b>개"
+    if not items:
+        return header + "\n\n상장 예정 종목이 없습니다."
+
+    weekday_kr = ["월","화","수","목","금","토","일"]
+    lines = []
+    for s in items:
+        d = s.listing_date
+        wd = weekday_kr[d.weekday()]
+        d_days = (d - today).days
+        d_label = f"D-{d_days}" if d_days > 0 else "D-Day"
+        url = DETAIL_URL_FMT.format(no=s.no)
+        op = f"{s.offering_price:,}원" if s.offering_price else "-"
+        lines.append(
+            f"• {d.strftime('%m/%d')}({wd}) <b>{d_label}</b>  "
+            f'<a href="{url}">{_esc_simple(s.name)}</a>  공모가 {op}'
+        )
+    body = "\n".join(lines)
+    return f"{header}\n\n{body}"
+
+
 def _format_listed_row(s: ListedStock) -> str:
     """
     수익률 메시지의 한 줄.
@@ -269,7 +311,7 @@ def _format_listed_row(s: ListedStock) -> str:
     else:
         main = "—"
     extra = f" (종가 {cp:+.1f}%)" if cp is not None and op is not None else ""
-    listing = (s.listing_date.strftime("%m/%d") if s.listing_date else "??")
+    listing = (s.listing_date.strftime("%y/%m/%d") if s.listing_date else "??")
     url = DETAIL_URL_FMT.format(no=s.no)
     name_link = f'<a href="{url}">{s.name}</a>'
     return f"• {listing}  {name_link}  <b>{main}</b>{extra}"
@@ -298,20 +340,37 @@ def _summary_line(stocks: list[ListedStock]) -> str:
     )
 
 
-def _build_month_returns_message(year: int, month: int) -> str:
-    """N월 상장 종목들의 첫날 수익률 메시지."""
-    stocks = fetch_listed_stocks(year)
+def _years_to_query(today: date) -> list[int]:
+    """수익률 조회 대상 연도: 작년 + 올해 (1월에는 작년 데이터 위주)."""
+    return [today.year - 1, today.year]
+
+
+def _fetch_listed_multi_year(years: list[int]) -> list[ListedStock]:
+    """여러 연도 상장 종목 통합 (캐시 활용)."""
+    out: list[ListedStock] = []
+    for y in years:
+        out.extend(fetch_listed_stocks(y))
+    return out
+
+
+def _build_month_returns_message(month: int, today: Optional[date] = None) -> str:
+    """N월 상장 종목들의 첫날 수익률 메시지 (작년+올해 둘 다)."""
+    if today is None:
+        today = date.today()
+    years = _years_to_query(today)
+    stocks = _fetch_listed_multi_year(years)
     items = [
         s for s in stocks
-        if s.listing_date and s.listing_date.year == year and s.listing_date.month == month
+        if s.listing_date and s.listing_date.month == month
         and s.close_price is not None and s.offering_price
     ]
     items.sort(key=lambda s: s.listing_date or date.min)
 
-    header = f"📈 <b>{year}년 {month}월 상장 종목 첫날 수익률</b>\n총 <b>{len(items)}</b>개\n"
+    years_str = "+".join(str(y) for y in years)
+    header = f"📈 <b>{years_str}년 {month}월 상장 종목 첫날 수익률</b>\n총 <b>{len(items)}</b>개\n"
 
     if not items:
-        return header + f"\n{year}년 {month}월에 상장된 종목이 없습니다 (또는 아직 미상장)."
+        return header + f"\n{years_str}년 {month}월에 상장된 종목이 없습니다."
 
     body = "\n".join(_format_listed_row(s) for s in items)
     summary = _summary_line(items)
@@ -336,12 +395,19 @@ def _ensure_grade_for(no: str, name: str) -> Optional[tuple[str, int, bool]]:
     return result.grade, result.total_score, result.insufficient
 
 
-def _build_grade_returns_message(target_grade: str, year: int) -> str:
-    """등급별 첫날 수익률 메시지. 미등록 종목은 detail 파싱으로 채움."""
-    init_db()  # 캐시 테이블 보장
-    stocks = fetch_listed_stocks(year)
+def _build_grade_returns_message(target_grade: str, today: Optional[date] = None) -> str:
+    """
+    등급별 첫날 수익률 메시지 (작년+올해 통합).
+    미등록 종목은 detail 파싱으로 채워 캐싱.
+    """
+    init_db()
+    if today is None:
+        today = date.today()
+    years = _years_to_query(today)
+    stocks = _fetch_listed_multi_year(years)
     listed = [s for s in stocks if s.close_price is not None and s.offering_price]
-    log.info("등급별 수익률(%s) — 후보 %d종목", target_grade, len(listed))
+    log.info("등급별 수익률(%s) — 후보 %d종목 (%s)",
+             target_grade, len(listed), years)
 
     matched: list[tuple[ListedStock, int]] = []
     for s in listed:
@@ -358,14 +424,15 @@ def _build_grade_returns_message(target_grade: str, year: int) -> str:
 
     emoji_for = {"1등급": "💎", "2등급": "🔥", "3등급": "✅", "4등급": "⚖️", "5등급": "❌"}
     emoji = emoji_for.get(target_grade, "")
+    years_str = "+".join(str(y) for y in years)
     header = (
-        f"{emoji} <b>{year}년 {target_grade} 종목 첫날 수익률</b>\n"
+        f"{emoji} <b>{years_str}년 {target_grade} 종목 첫날 수익률</b>\n"
         f"총 <b>{len(matched)}</b>개"
     )
 
     if not matched:
         return header + (
-            f"\n\n{year}년 상장 종목 중 {target_grade}으로 분류된 종목이 없습니다.\n"
+            f"\n\n{years_str}년 상장 종목 중 {target_grade}으로 분류된 종목이 없습니다.\n"
             f"(상장 후 수요예측 결과가 사라졌거나 데이터 부족으로 등급 산정이 안 된 종목 제외)"
         )
 
@@ -404,17 +471,20 @@ def handle_text(text: str, today: Optional[date] = None) -> Optional[str]:
         start, end = _week_range(today, 1)
         return _build_weekly_message(start, end, "다음주")
 
-    # 등급별 수익률
-    if text in GRADE_RETURN_CMDS:
-        return _build_grade_returns_message(GRADE_RETURN_CMDS[text], today.year)
+    if text in LISTING_ALIASES:
+        return _build_upcoming_listings_message(today)
 
-    # 월별 수익률 (/N월수익률)
+    # 등급별 수익률 (작년+올해 통합)
+    if text in GRADE_RETURN_CMDS:
+        return _build_grade_returns_message(GRADE_RETURN_CMDS[text], today=today)
+
+    # 월별 수익률 (/N월수익률) — 작년+올해 둘 다 보여줌
     m = MONTH_RETURN_RE.match(text)
     if m:
         month = int(m.group(1))
         if not (1 <= month <= 12):
             return f"⚠️ 월은 1~12 사이여야 합니다."
-        return _build_month_returns_message(today.year, month)
+        return _build_month_returns_message(month, today=today)
 
     # 청약 예정 (/N, /N월)
     m = MONTH_CMD_RE.match(text)
