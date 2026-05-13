@@ -33,6 +33,7 @@ from grader import GradeResult
 PHASE_DAY1 = "day1"
 PHASE_DAY2_MORNING = "day2_morning"
 PHASE_DAY2 = "day2"
+PHASE_REFUND = "refund"
 PHASE_LISTING_EVE = "listing_eve"
 PHASE_LISTING_DAY = "listing_day"
 
@@ -249,6 +250,54 @@ def build_monthly_digest_message(items: list[IpoSchedule], year: int, month: int
     return header + body + footer
 
 
+def build_refund_message(detail: IpoDetail) -> str:
+    """
+    청약 환불일 오전 알림.
+    마통으로 청약했다면 환불금 받자마자 마통으로 즉시 갚으라고 안내.
+    """
+    name = _esc(detail.name)
+    no = _esc(detail.no)
+    detail_url = DETAIL_URL_FMT.format(no=detail.no)
+
+    # 청약기간
+    if detail.subscribe_start and detail.subscribe_end:
+        if detail.subscribe_start == detail.subscribe_end:
+            sub_period = detail.subscribe_start.strftime("%Y-%m-%d")
+        else:
+            sub_period = (
+                f"{detail.subscribe_start.strftime('%Y-%m-%d')} ~ "
+                f"{detail.subscribe_end.strftime('%Y-%m-%d')}"
+            )
+    else:
+        sub_period = "-"
+
+    refund_str = "-"
+    if detail.refund_date:
+        wd = ["월","화","수","목","금","토","일"][detail.refund_date.weekday()]
+        refund_str = f"{detail.refund_date.strftime('%Y-%m-%d')}({wd})"
+
+    underwriter = _esc(detail.underwriter or "-")
+    final_price = (f"{detail.final_price:,}원" if detail.final_price is not None else "-")
+
+    # 마통 5천만원 일일 이자 (기본 가정)
+    amount = int(MARGIN_LOAN["scenario_amount"])
+    rate = MARGIN_LOAN["annual_rate"]
+    daily_interest = int(round(amount * rate / 365))
+
+    return (
+        f"💸 <b>오늘 청약 환불일!</b>\n\n"
+        f"<b>[{name}]</b>\n\n"
+        f"📅 청약일: {_esc(sub_period)}\n"
+        f"💵 환불일: <b>{_esc(refund_str)}</b>\n"
+        f"🏦 증권사: {underwriter}\n"
+        f"💰 공모가: {_esc(final_price)}\n\n"
+        f"<b>⚠️ 마통 사용 시 즉시 이체 권장</b>\n"
+        f"• 마통 {amount//10_000_000}천만원 기준 하루 이자 ≈ <b>{daily_interest:,}원</b>\n"
+        f"• 환불금 입금 확인 후 바로 마통 계좌로 송금하세요\n\n"
+        f'🔗 <a href="{_esc(detail_url)}">38커뮤 상세 (no={no})</a>'
+    )
+
+
 def build_listing_message(detail: IpoDetail, result, phase: str = PHASE_LISTING_EVE) -> str:
     """
     상장 알림 메시지 (전날 15:00 또는 당일 08:30).
@@ -373,6 +422,15 @@ def notify_listing(detail: IpoDetail, result, phase: str = PHASE_LISTING_EVE) ->
     ok = send_telegram(msg)
     if ok:
         log.info("[%s/%s/%s] 상장 알림 발송 OK", detail.no, detail.name, phase)
+    return ok
+
+
+def notify_refund(detail: IpoDetail) -> bool:
+    """환불일 알림 발송."""
+    msg = build_refund_message(detail)
+    ok = send_telegram(msg)
+    if ok:
+        log.info("[%s/%s/refund] 환불 알림 발송 OK", detail.no, detail.name)
     return ok
 
 

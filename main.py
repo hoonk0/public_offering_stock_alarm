@@ -54,6 +54,8 @@ from config import (
     MONTHLY_DAY,
     MONTHLY_HOUR,
     MONTHLY_MINUTE,
+    REFUND_HOUR,
+    REFUND_MINUTE,
 )
 from crawler import IpoSchedule, fetch_detail, fetch_listed_stocks, fetch_schedule_list
 from db import (
@@ -62,6 +64,7 @@ from db import (
     PHASE_DAY2_MORNING,
     PHASE_LISTING_DAY,
     PHASE_LISTING_EVE,
+    PHASE_REFUND,
     already_digested,
     already_sent,
     init_db,
@@ -75,6 +78,7 @@ from notifier import (
     notify,
     notify_listing,
     notify_monthly_digest,
+    notify_refund,
     send_telegram,
 )
 
@@ -395,6 +399,77 @@ def run_listing_day_alert(target_listing_day: Optional[date] = None,
 
 
 # ---------------------------------------------------------------------------
+# 5) 환불일 알림 (오전 09:00) — 마통 사용자에게 즉시 이체 안내
+# ---------------------------------------------------------------------------
+def run_refund_alert(target_refund_day: Optional[date] = None,
+                     dry_run: bool = False) -> None:
+    """
+    target_refund_day가 환불일인 종목들에게 알림 발송.
+    환불일 정보는 detail에 있으므로, schedule_list + listed_stocks 후보를 모아
+    각 detail에서 refund_date == target_refund_day 인 것 필터.
+    """
+    init_db()
+    if target_refund_day is None:
+        target_refund_day = date.today()
+    log.info("=== 환불 알림 시작 (refund_day=%s, dry_run=%s) ===",
+             target_refund_day, dry_run)
+
+    # 후보: 청약일정 + 신규상장 페이지 통합 (캐시 활용)
+    candidate_nos: dict[str, str] = {}  # no -> name
+    try:
+        for s in fetch_schedule_list():
+            candidate_nos[s.no] = s.name
+    except Exception as e:  # noqa: BLE001
+        log.exception("schedule_list fetch 실패: %s", e)
+    today_year = date.today().year
+    for y in (today_year - 1, today_year):
+        try:
+            for s in fetch_listed_stocks(y):
+                candidate_nos.setdefault(s.no, s.name)
+        except Exception as e:  # noqa: BLE001
+            log.exception("listed_stocks(%d) fetch 실패: %s", y, e)
+
+    log.info("환불 알림 후보 %d종목 detail 확인 중...", len(candidate_nos))
+
+    sent = skip = fail = 0
+    for no, name in candidate_nos.items():
+        if already_sent(no, target_refund_day, PHASE_REFUND):
+            skip += 1
+            continue
+        try:
+            detail = fetch_detail(no, name)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s/%s] detail 실패: %s", no, name, e)
+            continue
+
+        if detail.refund_date != target_refund_day:
+            continue  # 오늘 환불 아님
+
+        if dry_run:
+            from notifier import build_refund_message
+            log.info("[DRY-RUN/refund] %s/%s\n%s",
+                     no, name, build_refund_message(detail))
+            sent += 1
+            continue
+
+        ok = notify_refund(detail)
+        if ok:
+            mark_sent(
+                no=no,
+                subscribe_day=target_refund_day,  # 환불 알림은 환불일을 key로
+                phase=PHASE_REFUND,
+                name=name,
+                grade="",
+                total_score=0,
+            )
+            sent += 1
+        else:
+            fail += 1
+
+    log.info("=== 환불 알림 종료: 발송 %d, 스킵 %d, 실패 %d ===", sent, skip, fail)
+
+
+# ---------------------------------------------------------------------------
 # 캐시 자동 갱신 (백그라운드)
 # 라즈베리파이처럼 38커뮤 fetch가 느린 환경에서도 사용자는 항상 즉시 응답 받게.
 # 매시간 정각에 백그라운드로 schedule_list + listed_stocks 캐시 갱신.
@@ -463,6 +538,12 @@ def run_scheduler(enable_polling: bool = True) -> None:
         trigger=CronTrigger(hour=LISTING_DAY_HOUR, minute=LISTING_DAY_MINUTE),
         name="ipo_listing_day",
     )
+    # 환불일 09:00 (마통 즉시 이체 안내)
+    scheduler.add_job(
+        run_refund_alert,
+        trigger=CronTrigger(hour=REFUND_HOUR, minute=REFUND_MINUTE),
+        name="ipo_refund_alert",
+    )
     # 캐시 자동 갱신: 매시간 정각 (사용자는 항상 즉시 응답)
     scheduler.add_job(
         refresh_caches,
@@ -513,7 +594,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="IPO 등급 알림 봇")
     parser.add_argument(
         "--mode",
-        choices=["monthly", "day1", "day2_morning", "day2", "listing_eve", "listing_day"],
+        choices=["monthly", "day1", "day2_morning", "day2",
+                 "refund", "listing_eve", "listing_day"],
         default=None,
         help="즉시 1회 실행할 잡. 미지정 시 스케줄러 모드.",
     )
@@ -541,6 +623,8 @@ def main() -> None:
         run_day2_morning_alert(target_day=args.target_date, dry_run=args.dry_run)
     elif args.mode == "day2":
         run_day2_reminder(target_day=args.target_date, dry_run=args.dry_run)
+    elif args.mode == "refund":
+        run_refund_alert(target_refund_day=args.target_date, dry_run=args.dry_run)
     elif args.mode == "listing_eve":
         run_listing_eve_alert(target_listing_day=args.target_date, dry_run=args.dry_run)
     elif args.mode == "listing_day":

@@ -91,6 +91,10 @@ LISTING_EVE_MINUTE = 0
 LISTING_DAY_HOUR = 8
 LISTING_DAY_MINUTE = 30
 
+# 7) 청약 환불일 오전 알림 (마통 빨리 갚으라고)
+REFUND_HOUR = 9
+REFUND_MINUTE = 0
+
 # ---------------------------------------------------------------------------
 # 등급 임계값 (4대 지표별 점수)
 # 각 항목은 (하한 inclusive, 점수). 큰 값부터 위에서 아래로 매칭.

@@ -109,6 +109,7 @@ class IpoDetail:
     underwriter: str = ""                         # 주관사
     subscribe_start: Optional[date] = None
     subscribe_end: Optional[date] = None
+    refund_date: Optional[date] = None            # 청약 미배정 환불일
     listing_date: Optional[date] = None           # 상장 예정일/완료일
     raw_errors: list[str] = field(default_factory=list)  # 파싱 실패 항목들
 
@@ -695,6 +696,13 @@ def fetch_detail(no: str, name: str = "", base: Optional[IpoSchedule] = None) ->
             detail.listing_date = _parse_date_kr(raw2 or "")
     except Exception as e:  # noqa: BLE001
         detail.raw_errors.append(f"listing_date 예외: {e}")
+
+    # --- 환불일 ---
+    try:
+        raw = _find_value_by_label(soup, r"^환불일$|^환불금지급일$")
+        detail.refund_date = _parse_date_kr(raw or "")
+    except Exception as e:  # noqa: BLE001
+        detail.raw_errors.append(f"refund_date 예외: {e}")
 
     if detail.raw_errors:
         log.warning("[%s/%s] 파싱 경고: %s", no, detail.name, "; ".join(detail.raw_errors))
