@@ -56,7 +56,16 @@ REQUEST_DELAY_SEC = 0.5
 # 텔레그램
 # ---------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# 여러 사용자 지원: .env의 TELEGRAM_CHAT_ID에 콤마로 여러 chat_id 나열 가능.
+# 예: TELEGRAM_CHAT_ID=1567993608,1731567173
+TELEGRAM_CHAT_IDS: list[str] = [
+    cid.strip() for cid in os.getenv("TELEGRAM_CHAT_ID", "").split(",")
+    if cid.strip()
+]
+# 호환성: 단일 chat_id가 필요한 코드용 (첫 번째 ID)
+TELEGRAM_CHAT_ID = TELEGRAM_CHAT_IDS[0] if TELEGRAM_CHAT_IDS else ""
+
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
 # ---------------------------------------------------------------------------

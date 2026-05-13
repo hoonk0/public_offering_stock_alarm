@@ -35,6 +35,7 @@ from config import (
     HTTP_HEADERS,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
+    TELEGRAM_CHAT_IDS,
 )
 from crawler import (
     ListedStock,
@@ -531,11 +532,12 @@ def run_polling(stop_check: Optional[callable] = None) -> None:
         log.error("TELEGRAM_BOT_TOKEN 미설정 → 폴링 시작 불가")
         return
 
-    chat_filter = str(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
+    # 권한 필터: 등록된 모든 chat_id에서 오는 메시지만 응답
+    chat_filter: set[str] = {str(c) for c in TELEGRAM_CHAT_IDS}
     if not chat_filter:
-        log.warning("TELEGRAM_CHAT_ID 미설정 → 모든 사용자에게 응답함 (보안 주의)")
+        log.warning("TELEGRAM_CHAT_IDS 미설정 → 모든 사용자에게 응답함 (보안 주의)")
 
-    log.info("텔레그램 봇 폴링 시작 (chat_filter=%s)", chat_filter or "OFF")
+    log.info("텔레그램 봇 폴링 시작 (허용된 사용자: %d명)", len(chat_filter))
     offset: Optional[int] = None
 
     while True:
@@ -558,7 +560,7 @@ def run_polling(stop_check: Optional[callable] = None) -> None:
             time.sleep(5)
 
 
-def _process_update(update: dict, chat_filter: Optional[str]) -> None:
+def _process_update(update: dict, chat_filter: set[str]) -> None:
     """update 1개 처리: 권한 체크 → 명령어 해석 → 응답."""
     msg = update.get("message") or update.get("edited_message")
     if not msg:
@@ -568,8 +570,8 @@ def _process_update(update: dict, chat_filter: Optional[str]) -> None:
     chat_id = str(chat.get("id", ""))
     text = msg.get("text", "") or ""
 
-    # 권한 필터
-    if chat_filter and chat_id != chat_filter:
+    # 권한 필터: 등록된 chat_id 집합에 있는 사용자만 응답
+    if chat_filter and chat_id not in chat_filter:
         log.warning("권한 없는 챗(%s)에서 메시지 수신 — 무시: %r", chat_id, text[:50])
         return
 

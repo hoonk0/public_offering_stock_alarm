@@ -25,6 +25,7 @@ from config import (
     TELEGRAM_API_URL,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
+    TELEGRAM_CHAT_IDS,
 )
 from crawler import IpoDetail, IpoSchedule
 from grader import GradeResult
@@ -360,21 +361,8 @@ def build_listing_message(detail: IpoDetail, result, phase: str = PHASE_LISTING_
     )
 
 
-def send_telegram(text: str,
-                  bot_token: Optional[str] = None,
-                  chat_id: Optional[str] = None,
-                  disable_preview: bool = True) -> bool:
-    """
-    Telegram sendMessage 호출. 성공 True, 실패 False.
-    예외는 로그만 남기고 호출부 흐름은 끊지 않는다.
-    """
-    token = bot_token or TELEGRAM_BOT_TOKEN
-    chat = chat_id or TELEGRAM_CHAT_ID
-
-    if not token or not chat:
-        log.error("텔레그램 토큰/챗ID 미설정 - 메시지 발송 스킵")
-        return False
-
+def _send_one(token: str, chat: str, text: str, disable_preview: bool) -> bool:
+    """단일 chat_id에 메시지 발송. 내부 헬퍼."""
     url = TELEGRAM_API_URL.format(token=token)
     payload = {
         "chat_id": chat,
@@ -385,16 +373,51 @@ def send_telegram(text: str,
     try:
         resp = requests.post(url, data=payload, timeout=15)
         if resp.status_code != 200:
-            log.error("텔레그램 발송 실패 status=%s body=%s", resp.status_code, resp.text[:300])
+            log.error("텔레그램 발송 실패 chat=%s status=%s body=%s",
+                      chat, resp.status_code, resp.text[:300])
             return False
         body = resp.json()
         if not body.get("ok"):
-            log.error("텔레그램 응답 ok=false body=%s", body)
+            log.error("텔레그램 응답 ok=false chat=%s body=%s", chat, body)
             return False
         return True
     except requests.RequestException as e:
-        log.error("텔레그램 요청 예외: %s", e)
+        log.error("텔레그램 요청 예외 chat=%s: %s", chat, e)
         return False
+
+
+def send_telegram(text: str,
+                  bot_token: Optional[str] = None,
+                  chat_id: Optional[str] = None,
+                  disable_preview: bool = True) -> bool:
+    """
+    Telegram sendMessage 호출.
+    - chat_id 지정 시: 그 사람에게만 발송 (명령어 응답용)
+    - chat_id 미지정 시: TELEGRAM_CHAT_IDS의 모든 사용자에게 broadcast (자동 알림용)
+    하나라도 성공하면 True 반환. 예외는 로그만.
+    """
+    token = bot_token or TELEGRAM_BOT_TOKEN
+    if not token:
+        log.error("텔레그램 토큰 미설정 - 메시지 발송 스킵")
+        return False
+
+    # 발송 대상 결정
+    if chat_id:
+        targets = [chat_id]
+    else:
+        targets = TELEGRAM_CHAT_IDS
+
+    if not targets:
+        log.error("텔레그램 챗ID 미설정 - 메시지 발송 스킵")
+        return False
+
+    success_count = 0
+    for chat in targets:
+        if _send_one(token, chat, text, disable_preview):
+            success_count += 1
+    if len(targets) > 1:
+        log.info("텔레그램 broadcast: %d/%d 성공", success_count, len(targets))
+    return success_count > 0
 
 
 def notify(detail: IpoDetail, result: GradeResult, phase: str = PHASE_DAY1) -> bool:
