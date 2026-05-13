@@ -83,6 +83,14 @@ DAY2_MORNING_MINUTE = 30
 DAY2_HOUR = 15
 DAY2_MINUTE = 0
 
+# 5) 상장 전날 오후 알림 (D-1 15:00)
+LISTING_EVE_HOUR = 15
+LISTING_EVE_MINUTE = 0
+
+# 6) 상장 당일 오전 알림 (D-day 08:30)
+LISTING_DAY_HOUR = 8
+LISTING_DAY_MINUTE = 30
+
 # ---------------------------------------------------------------------------
 # 등급 임계값 (4대 지표별 점수)
 # 각 항목은 (하한 inclusive, 점수). 큰 값부터 위에서 아래로 매칭.

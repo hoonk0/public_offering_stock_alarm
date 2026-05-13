@@ -675,8 +675,15 @@ def fetch_detail(no: str, name: str = "", base: Optional[IpoSchedule] = None) ->
     except Exception as e:  # noqa: BLE001
         detail.raw_errors.append(f"price_position 예외: {e}")
 
-    # 주관사는 일정 페이지에서 받아온 값을 그대로 신뢰.
-    # 상세 페이지 보호예수표에 '주관사 의무인수' 헤더가 있어 잘못 매칭되므로 fallback 안 함.
+    # 주관사: 일정 페이지에서 받아온 값 우선. 없으면 상세에서 '주간사' 정확 매칭으로 찾기
+    # (상세 페이지의 '주관사 의무인수' 헤더와 충돌 회피).
+    if not detail.underwriter:
+        try:
+            raw = _find_value_by_label(soup, r"^주간사$|^대표\s*주관사$")
+            if raw and 1 < len(raw) < 60 and re.search(r"증권|투자|금융", raw):
+                detail.underwriter = raw
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- 상장 예정/완료일 ---
     try:

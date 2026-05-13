@@ -33,6 +33,8 @@ from grader import GradeResult
 PHASE_DAY1 = "day1"
 PHASE_DAY2_MORNING = "day2_morning"
 PHASE_DAY2 = "day2"
+PHASE_LISTING_EVE = "listing_eve"
+PHASE_LISTING_DAY = "listing_day"
 
 log = logging.getLogger(__name__)
 
@@ -247,6 +249,68 @@ def build_monthly_digest_message(items: list[IpoSchedule], year: int, month: int
     return header + body + footer
 
 
+def build_listing_message(detail: IpoDetail, result, phase: str = PHASE_LISTING_EVE) -> str:
+    """
+    상장 알림 메시지 (전날 15:00 또는 당일 08:30).
+    Day1/Day2 알림과 별개 — 청약은 이미 끝났고 상장 임박 안내.
+    증권사(주관사), 공모가, 등급, 등급별 평균 시초가 수익률 포함.
+    """
+    name = _esc(detail.name)
+    no = _esc(detail.no)
+    detail_url = DETAIL_URL_FMT.format(no=detail.no)
+
+    if phase == PHASE_LISTING_DAY:
+        phase_header = "🎉 <b>오늘 상장!</b>\n\n"
+    else:
+        phase_header = "📢 <b>내일 상장 (D-1)</b>\n\n"
+
+    # 상장일
+    listing_str = "-"
+    if detail.listing_date:
+        weekday = ["월","화","수","목","금","토","일"][detail.listing_date.weekday()]
+        listing_str = f"{detail.listing_date.strftime('%Y-%m-%d')}({weekday})"
+
+    # 공모가
+    final_price = (
+        f"{detail.final_price:,}원" if detail.final_price is not None
+        else f"{detail.band_low:,}~{detail.band_high:,}원" if detail.band_low and detail.band_high
+        else "-"
+    )
+
+    underwriter = _esc(detail.underwriter or "-")
+
+    # 등급별 예상 시초가
+    expected_line = ""
+    if not result.insufficient:
+        stat = GRADE_HISTORICAL_RETURNS.get(result.grade)
+        if stat and detail.final_price:
+            avg_pct = stat["avg_pct"]
+            gain = int(round(detail.final_price * avg_pct / 100))
+            target_price = detail.final_price + gain
+            expected_line = (
+                f"📈 <b>예상 시초가</b>: 약 {target_price:,}원 "
+                f"(+{gain:,}원)\n"
+                f"   ({result.grade} 평균 시초가 +{avg_pct:.0f}%, "
+                f"과거 {int(stat['n'])}개 기준)\n"
+            )
+
+    grade_line = ""
+    if not result.insufficient:
+        grade_line = f"{result.emoji} <b>등급: {result.grade}</b> ({result.total_score}/12)\n"
+
+    return (
+        f"{phase_header}"
+        f"<b>[{name}]</b>\n\n"
+        f"🎯 상장일: {_esc(listing_str)}\n"
+        f"🏦 증권사: <b>{underwriter}</b>\n"
+        f"💰 공모가: <b>{_esc(final_price)}</b>\n"
+        f"{grade_line}"
+        f"\n"
+        f"{expected_line}"
+        f'\n🔗 <a href="{_esc(detail_url)}">38커뮤 상세 (no={no})</a>'
+    )
+
+
 def send_telegram(text: str,
                   bot_token: Optional[str] = None,
                   chat_id: Optional[str] = None,
@@ -300,6 +364,15 @@ def notify_monthly_digest(items: list[IpoSchedule], year: int, month: int) -> bo
     ok = send_telegram(msg)
     if ok:
         log.info("월간 다이제스트 발송 OK (%d-%02d, %d종목)", year, month, len(items))
+    return ok
+
+
+def notify_listing(detail: IpoDetail, result, phase: str = PHASE_LISTING_EVE) -> bool:
+    """상장 전날/당일 알림 발송."""
+    msg = build_listing_message(detail, result, phase=phase)
+    ok = send_telegram(msg)
+    if ok:
+        log.info("[%s/%s/%s] 상장 알림 발송 OK", detail.no, detail.name, phase)
     return ok
 
 

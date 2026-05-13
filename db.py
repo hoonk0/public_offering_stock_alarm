@@ -28,9 +28,11 @@ from config import DB_PATH
 log = logging.getLogger(__name__)
 
 # 발송 단계
-PHASE_DAY1 = "day1"                # 첫날 08:30
-PHASE_DAY2_MORNING = "day2_morning"  # 마감일 08:30 (신규)
-PHASE_DAY2 = "day2"                # 마감일 15:00 임박 리마인더
+PHASE_DAY1 = "day1"                  # 청약 첫날 08:30
+PHASE_DAY2_MORNING = "day2_morning"  # 청약 마감일 08:30
+PHASE_DAY2 = "day2"                  # 청약 마감일 15:00 임박 리마인더
+PHASE_LISTING_EVE = "listing_eve"    # 상장 전날 15:00
+PHASE_LISTING_DAY = "listing_day"    # 상장 당일 08:30
 
 
 @contextmanager

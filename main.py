@@ -30,7 +30,7 @@ import argparse
 import calendar
 import logging
 import sys
-from datetime import date
+from datetime import date, timedelta
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
@@ -46,16 +46,22 @@ from config import (
     DAY2_MINUTE,
     DAY2_MORNING_HOUR,
     DAY2_MORNING_MINUTE,
+    LISTING_DAY_HOUR,
+    LISTING_DAY_MINUTE,
+    LISTING_EVE_HOUR,
+    LISTING_EVE_MINUTE,
     LOG_PATH,
     MONTHLY_DAY,
     MONTHLY_HOUR,
     MONTHLY_MINUTE,
 )
-from crawler import IpoSchedule, fetch_detail, fetch_schedule_list
+from crawler import IpoSchedule, fetch_detail, fetch_listed_stocks, fetch_schedule_list
 from db import (
     PHASE_DAY1,
     PHASE_DAY2,
     PHASE_DAY2_MORNING,
+    PHASE_LISTING_DAY,
+    PHASE_LISTING_EVE,
     already_digested,
     already_sent,
     init_db,
@@ -67,6 +73,7 @@ from notifier import (
     build_message,
     build_monthly_digest_message,
     notify,
+    notify_listing,
     notify_monthly_digest,
     send_telegram,
 )
@@ -301,6 +308,93 @@ def run_day2_reminder(target_day: Optional[date] = None,
 
 
 # ---------------------------------------------------------------------------
+# 4) 상장 전날/당일 알림
+# ---------------------------------------------------------------------------
+def _run_listing_alert(target_listing_day: date, phase: str, dry_run: bool) -> None:
+    """
+    target_listing_day에 상장하는 종목들에게 알림 발송.
+    phase: PHASE_LISTING_EVE (전날 15:00) 또는 PHASE_LISTING_DAY (당일 08:30)
+    """
+    init_db()
+    log.info("=== 상장 알림(%s) 시작 (listing_day=%s, dry_run=%s) ===",
+             phase, target_listing_day, dry_run)
+
+    # 신규상장 페이지에서 작년+올해 데이터로 후보 추출
+    candidates = []
+    today_year = date.today().year
+    for y in (today_year - 1, today_year):
+        try:
+            candidates.extend(fetch_listed_stocks(y))
+        except Exception as e:  # noqa: BLE001
+            log.exception("listed_stocks(%d) fetch 실패: %s", y, e)
+
+    targets = [s for s in candidates if s.listing_date == target_listing_day]
+    log.info("상장 매칭 %d종목", len(targets))
+
+    sent = skip = fail = 0
+    for s in targets:
+        # 중복 방지 키 = (no, listing_date, phase)
+        if already_sent(s.no, s.listing_date, phase):
+            log.info("[%s/%s/%s] 이미 발송됨 - 스킵", s.no, s.name, phase)
+            skip += 1
+            continue
+
+        try:
+            detail = fetch_detail(s.no, s.name)
+            # listed_stocks에 있는 정보를 detail에도 보강
+            if not detail.listing_date:
+                detail.listing_date = s.listing_date
+            if not detail.final_price:
+                detail.final_price = s.offering_price
+        except Exception as e:  # noqa: BLE001
+            log.exception("[%s/%s] 상세 파싱 실패: %s", s.no, s.name, e)
+            fail += 1
+            continue
+
+        result = grade(detail)
+
+        if dry_run:
+            from notifier import build_listing_message
+            preview = build_listing_message(detail, result, phase=phase)
+            log.info("[DRY-RUN/%s] %s/%s\n%s", phase, s.no, s.name, preview)
+            sent += 1
+            continue
+
+        ok = notify_listing(detail, result, phase=phase)
+        if ok:
+            mark_sent(
+                no=s.no,
+                subscribe_day=s.listing_date,  # 상장 알림에선 상장일을 key로
+                phase=phase,
+                name=s.name,
+                grade=result.grade,
+                total_score=result.total_score,
+            )
+            sent += 1
+        else:
+            fail += 1
+
+    log.info("=== 상장 알림(%s) 종료: 발송 %d, 스킵 %d, 실패 %d ===",
+             phase, sent, skip, fail)
+
+
+def run_listing_eve_alert(target_listing_day: Optional[date] = None,
+                          dry_run: bool = False) -> None:
+    """상장 전날 알림: target_listing_day(기본: 내일)에 상장하는 종목들."""
+    if target_listing_day is None:
+        target_listing_day = date.today() + timedelta(days=1)
+    _run_listing_alert(target_listing_day, PHASE_LISTING_EVE, dry_run)
+
+
+def run_listing_day_alert(target_listing_day: Optional[date] = None,
+                          dry_run: bool = False) -> None:
+    """상장 당일 알림: target_listing_day(기본: 오늘)에 상장하는 종목들."""
+    if target_listing_day is None:
+        target_listing_day = date.today()
+    _run_listing_alert(target_listing_day, PHASE_LISTING_DAY, dry_run)
+
+
+# ---------------------------------------------------------------------------
 # 캐시 자동 갱신 (백그라운드)
 # 라즈베리파이처럼 38커뮤 fetch가 느린 환경에서도 사용자는 항상 즉시 응답 받게.
 # 매시간 정각에 백그라운드로 schedule_list + listed_stocks 캐시 갱신.
@@ -358,6 +452,17 @@ def run_scheduler(enable_polling: bool = True) -> None:
         trigger=CronTrigger(hour=DAY2_HOUR, minute=DAY2_MINUTE),
         name="ipo_day2_reminder",
     )
+    # 상장 전날 15:00, 상장 당일 08:30
+    scheduler.add_job(
+        run_listing_eve_alert,
+        trigger=CronTrigger(hour=LISTING_EVE_HOUR, minute=LISTING_EVE_MINUTE),
+        name="ipo_listing_eve",
+    )
+    scheduler.add_job(
+        run_listing_day_alert,
+        trigger=CronTrigger(hour=LISTING_DAY_HOUR, minute=LISTING_DAY_MINUTE),
+        name="ipo_listing_day",
+    )
     # 캐시 자동 갱신: 매시간 정각 (사용자는 항상 즉시 응답)
     scheduler.add_job(
         refresh_caches,
@@ -368,11 +473,14 @@ def run_scheduler(enable_polling: bool = True) -> None:
     log.info(
         "스케줄러 시작 (KST): "
         "월간=매월%d일 %02d:%02d, Day1=매일 %02d:%02d, "
-        "Day2오전=매일 %02d:%02d, Day2오후=매일 %02d:%02d, 캐시갱신=매시간 정각",
+        "Day2오전=매일 %02d:%02d, Day2오후=매일 %02d:%02d, "
+        "상장D-1=매일 %02d:%02d, 상장당일=매일 %02d:%02d, 캐시갱신=매시간 정각",
         MONTHLY_DAY, MONTHLY_HOUR, MONTHLY_MINUTE,
         DAY1_HOUR, DAY1_MINUTE,
         DAY2_MORNING_HOUR, DAY2_MORNING_MINUTE,
         DAY2_HOUR, DAY2_MINUTE,
+        LISTING_EVE_HOUR, LISTING_EVE_MINUTE,
+        LISTING_DAY_HOUR, LISTING_DAY_MINUTE,
     )
     scheduler.start()
 
@@ -405,7 +513,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="IPO 등급 알림 봇")
     parser.add_argument(
         "--mode",
-        choices=["monthly", "day1", "day2_morning", "day2"],
+        choices=["monthly", "day1", "day2_morning", "day2", "listing_eve", "listing_day"],
         default=None,
         help="즉시 1회 실행할 잡. 미지정 시 스케줄러 모드.",
     )
@@ -433,6 +541,10 @@ def main() -> None:
         run_day2_morning_alert(target_day=args.target_date, dry_run=args.dry_run)
     elif args.mode == "day2":
         run_day2_reminder(target_day=args.target_date, dry_run=args.dry_run)
+    elif args.mode == "listing_eve":
+        run_listing_eve_alert(target_listing_day=args.target_date, dry_run=args.dry_run)
+    elif args.mode == "listing_day":
+        run_listing_day_alert(target_listing_day=args.target_date, dry_run=args.dry_run)
     elif args.bot_only:
         run_polling()
     else:
