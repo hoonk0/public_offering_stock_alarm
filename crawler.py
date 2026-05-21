@@ -111,6 +111,8 @@ class IpoDetail:
     subscribe_end: Optional[date] = None
     refund_date: Optional[date] = None            # 청약 미배정 환불일
     listing_date: Optional[date] = None           # 상장 예정일/완료일
+    retail_competition: Optional[float] = None    # 일반청약 경쟁률 (38커뮤 갱신값)
+    retail_competition_prorata: Optional[float] = None  # 비례 청약 경쟁률
     raw_errors: list[str] = field(default_factory=list)  # 파싱 실패 항목들
 
 
@@ -703,6 +705,22 @@ def fetch_detail(no: str, name: str = "", base: Optional[IpoSchedule] = None) ->
         detail.refund_date = _parse_date_kr(raw or "")
     except Exception as e:  # noqa: BLE001
         detail.raw_errors.append(f"refund_date 예외: {e}")
+
+    # --- 일반청약 경쟁률 ---
+    # 38커뮤 표기 형식: "3169.86:1 (비례 6340:1)" 또는 빈값
+    try:
+        raw = _find_value_by_label(soup, r"^청약경쟁률$")
+        if raw:
+            # 첫 숫자 = 통합 경쟁률
+            m_all = re.search(r"(\d+(?:\.\d+)?)\s*:\s*1", raw)
+            if m_all:
+                detail.retail_competition = float(m_all.group(1))
+            # 괄호 안 "비례 XXX:1"
+            m_pro = re.search(r"비례\s*(\d+(?:\.\d+)?)\s*:\s*1", raw)
+            if m_pro:
+                detail.retail_competition_prorata = float(m_pro.group(1))
+    except Exception as e:  # noqa: BLE001
+        detail.raw_errors.append(f"retail_competition 예외: {e}")
 
     if detail.raw_errors:
         log.warning("[%s/%s] 파싱 경고: %s", no, detail.name, "; ".join(detail.raw_errors))

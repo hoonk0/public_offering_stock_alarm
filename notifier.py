@@ -251,6 +251,77 @@ def build_monthly_digest_message(items: list[IpoSchedule], year: int, month: int
     return header + body + footer
 
 
+def build_subscription_status_message(detail: IpoDetail, hour_label: str) -> str:
+    """
+    청약 마감일 14:00 / 15:00 진행 상황 알림.
+    38커뮤가 청약 진행 중 청약경쟁률을 갱신하면 그 값을 표시.
+    데이터 미공시 시 안내 문구로 대체.
+
+    배정 추정:
+      - 본인 청약 가능 주식 = 마통 / (공모가 × 50% 증거금)
+      - 비례 배정 ≈ 신청주식 / 비례경쟁률
+      - 균등 배정 ≈ 1주 (단순 가정)
+    """
+    name = _esc(detail.name)
+    no = _esc(detail.no)
+    detail_url = DETAIL_URL_FMT.format(no=detail.no)
+    underwriter = _esc(detail.underwriter or "-")
+    final_price = (f"{detail.final_price:,}원" if detail.final_price is not None else "-")
+
+    header = f"📊 <b>[{name}] 청약 진행 상황 ({hour_label})</b>\n\n"
+
+    # 청약경쟁률 표시
+    if detail.retail_competition is not None:
+        comp_line = f"📈 청약경쟁률: <b>{detail.retail_competition:,.1f}:1</b>"
+        if detail.retail_competition_prorata is not None:
+            comp_line += f" (비례 <b>{detail.retail_competition_prorata:,.0f}:1</b>)"
+        comp_line += "\n"
+        has_data = True
+    else:
+        comp_line = "📈 청약경쟁률: <i>38커뮤 미공시</i> (마감 후 갱신 가능)\n"
+        has_data = False
+
+    # 마감 시간 안내
+    close_line = "⏰ 청약 마감: 오늘 16:00 (대부분 증권사 기준)\n"
+
+    info = (
+        f"🏦 증권사: {underwriter}\n"
+        f"💰 공모가: {_esc(final_price)}\n"
+    )
+
+    # 배정 추정 (데이터 있을 때만)
+    alloc_section = ""
+    if has_data and detail.final_price and detail.retail_competition_prorata:
+        amount = int(MARGIN_LOAN["scenario_amount"])
+        deposit_per_share = max(1, int(round(detail.final_price * 0.5)))
+        apply_shares = amount // deposit_per_share
+        prorata = detail.retail_competition_prorata
+        proportional = int(apply_shares // prorata) if prorata > 0 else 0
+        equal_share = 1  # 단순 가정
+        allocated = proportional + equal_share
+
+        # 예상 차익 (1등급 평균 +248% 등 사용 안 함, 따상 가정 +30% 단기 매도)
+        # 청약 시 평균이 아니라 따상 시초가 가정 → 더 보수적
+        gain_if_open_up = int(round(detail.final_price * 0.6 * allocated))  # +60% 가정
+        alloc_section = (
+            f"\n<b>🧮 마통 {amount//10_000_000}천만원 기준 배정 추정</b>\n"
+            f"• 신청 가능: {apply_shares:,}주\n"
+            f"• 비례 배정 추정: {proportional:,}주 (실시간 비례경쟁률 {prorata:,.0f}:1 기준)\n"
+            f"• 균등 배정 추정: 1주\n"
+            f"• 총 약 <b>{allocated:,}주</b>\n"
+            f"• 시초가 +60% 가정 시 차익 ≈ <b>+{gain_if_open_up:,}원</b>\n"
+        )
+
+    return (
+        f"{header}"
+        f"{comp_line}"
+        f"{info}"
+        f"{close_line}"
+        f"{alloc_section}"
+        f'\n🔗 <a href="{_esc(detail_url)}">38커뮤 상세 (no={no})</a>'
+    )
+
+
 def build_refund_message(detail: IpoDetail) -> str:
     """
     청약 환불일 오전 알림.
@@ -454,6 +525,16 @@ def notify_refund(detail: IpoDetail) -> bool:
     ok = send_telegram(msg)
     if ok:
         log.info("[%s/%s/refund] 환불 알림 발송 OK", detail.no, detail.name)
+    return ok
+
+
+def notify_subscription_status(detail: IpoDetail, hour_label: str) -> bool:
+    """청약 진행 상황 알림 발송."""
+    msg = build_subscription_status_message(detail, hour_label)
+    ok = send_telegram(msg)
+    if ok:
+        log.info("[%s/%s/status@%s] 청약상태 알림 발송 OK",
+                 detail.no, detail.name, hour_label)
     return ok
 
 

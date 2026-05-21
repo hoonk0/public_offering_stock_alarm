@@ -56,6 +56,7 @@ from config import (
     MONTHLY_MINUTE,
     REFUND_HOUR,
     REFUND_MINUTE,
+    SUB_STATUS_HOURS_BEFORE_CLOSE,
 )
 from crawler import IpoSchedule, fetch_detail, fetch_listed_stocks, fetch_schedule_list
 from db import (
@@ -65,6 +66,8 @@ from db import (
     PHASE_LISTING_DAY,
     PHASE_LISTING_EVE,
     PHASE_REFUND,
+    PHASE_SUB_STATUS_14,
+    PHASE_SUB_STATUS_15,
     already_digested,
     already_sent,
     init_db,
@@ -79,6 +82,7 @@ from notifier import (
     notify_listing,
     notify_monthly_digest,
     notify_refund,
+    notify_subscription_status,
     send_telegram,
 )
 
@@ -470,6 +474,76 @@ def run_refund_alert(target_refund_day: Optional[date] = None,
 
 
 # ---------------------------------------------------------------------------
+# 6) 청약 마감일 진행 상황 알림 (14:00, 15:00)
+# ---------------------------------------------------------------------------
+def run_subscription_status_alert(hour_label: str, phase: str,
+                                  target_day: Optional[date] = None,
+                                  dry_run: bool = False) -> None:
+    """
+    target_day가 청약 마감일(subscribe_end == today)인 종목들에게 현재 시점
+    청약 진행 상황 알림 발송. 38커뮤가 진행 중 데이터 갱신 시 활용.
+    """
+    init_db()
+    if target_day is None:
+        target_day = date.today()
+    log.info("=== 청약 상태 알림(%s) 시작 (target_day=%s, dry_run=%s) ===",
+             phase, target_day, dry_run)
+
+    schedules = _safe_fetch_schedules()
+    targets = [
+        s for s in schedules
+        if s.subscribe_end == target_day
+    ]
+    log.info("청약 마감일 매칭 %d종목", len(targets))
+
+    sent = skip = fail = 0
+    for s in targets:
+        if already_sent(s.no, target_day, phase):
+            skip += 1
+            continue
+        try:
+            detail = fetch_detail(s.no, s.name, base=s)
+        except Exception as e:  # noqa: BLE001
+            log.exception("[%s/%s] detail 실패: %s", s.no, s.name, e)
+            fail += 1
+            continue
+
+        if dry_run:
+            from notifier import build_subscription_status_message
+            log.info("[DRY-RUN/%s] %s/%s\n%s", phase, s.no, s.name,
+                     build_subscription_status_message(detail, hour_label))
+            sent += 1
+            continue
+
+        ok = notify_subscription_status(detail, hour_label)
+        if ok:
+            mark_sent(
+                no=s.no,
+                subscribe_day=target_day,
+                phase=phase,
+                name=s.name,
+                grade="",
+                total_score=0,
+            )
+            sent += 1
+        else:
+            fail += 1
+
+    log.info("=== 청약 상태 알림(%s) 종료: 발송 %d, 스킵 %d, 실패 %d ===",
+             phase, sent, skip, fail)
+
+
+def run_subscription_status_14() -> None:
+    """14:00 진행상황 알림 (마감 2시간 전)."""
+    run_subscription_status_alert("14:00", PHASE_SUB_STATUS_14)
+
+
+def run_subscription_status_15() -> None:
+    """15:00 진행상황 알림 (마감 1시간 전)."""
+    run_subscription_status_alert("15:00", PHASE_SUB_STATUS_15)
+
+
+# ---------------------------------------------------------------------------
 # 캐시 자동 갱신 (백그라운드)
 # 라즈베리파이처럼 38커뮤 fetch가 느린 환경에서도 사용자는 항상 즉시 응답 받게.
 # 매시간 정각에 백그라운드로 schedule_list + listed_stocks 캐시 갱신.
@@ -543,6 +617,19 @@ def run_scheduler(enable_polling: bool = True) -> None:
         run_refund_alert,
         trigger=CronTrigger(hour=REFUND_HOUR, minute=REFUND_MINUTE),
         name="ipo_refund_alert",
+    )
+    # 청약 마감일 14:00, 15:00 진행 상황 (마감 2시간/1시간 전)
+    scheduler.add_job(
+        run_subscription_status_14,
+        trigger=CronTrigger(hour=SUB_STATUS_HOURS_BEFORE_CLOSE[0][0],
+                             minute=SUB_STATUS_HOURS_BEFORE_CLOSE[0][1]),
+        name="ipo_sub_status_14",
+    )
+    scheduler.add_job(
+        run_subscription_status_15,
+        trigger=CronTrigger(hour=SUB_STATUS_HOURS_BEFORE_CLOSE[1][0],
+                             minute=SUB_STATUS_HOURS_BEFORE_CLOSE[1][1]),
+        name="ipo_sub_status_15",
     )
     # 캐시 자동 갱신: 매시간 정각 (사용자는 항상 즉시 응답)
     scheduler.add_job(

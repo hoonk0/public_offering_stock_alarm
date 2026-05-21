@@ -32,6 +32,8 @@ PHASE_DAY1 = "day1"                  # 청약 첫날 08:30
 PHASE_DAY2_MORNING = "day2_morning"  # 청약 마감일 08:30
 PHASE_DAY2 = "day2"                  # 청약 마감일 15:00 임박 리마인더
 PHASE_REFUND = "refund"              # 환불일 09:00 (마통 갚으라고)
+PHASE_SUB_STATUS_14 = "sub_status_14"  # 청약 마감일 14:00 진행 상황
+PHASE_SUB_STATUS_15 = "sub_status_15"  # 청약 마감일 15:00 진행 상황
 PHASE_LISTING_EVE = "listing_eve"    # 상장 전날 15:00
 PHASE_LISTING_DAY = "listing_day"    # 상장 당일 08:30
 
